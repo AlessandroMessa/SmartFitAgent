@@ -1,0 +1,3 @@
+/.env
+/.venv
+/cli_agent.py
