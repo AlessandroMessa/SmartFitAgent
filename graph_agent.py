@@ -107,11 +107,6 @@ try:
     print("--------------------------------------------------")
     print(codice_mermaid)
     print("--------------------------------------------------")
-    print("\n💡 ISTRUZIONI:")
-    print("1. Copia il codice racchiuso tra i trattini qui sopra.")
-    print("2. Vai sul sito web gratuito: https://mermaid.live")
-    print("3. Incolla il codice nel riquadro di sinistra (sotto 'Code').")
-    print("4. Sulla destra vedrai apparire magicamente la mappa del tuo LangGraph!")
     
 except Exception as e:
     print(f"⚠️ Impossibile generare il codice Mermaid: {e}")
