@@ -1,8 +1,10 @@
 from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from groq import Groq
+from pathlib import Path
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
+import json
 
 load_dotenv()
 client = Groq()
@@ -10,23 +12,95 @@ client = Groq()
 # 1. Definiamo lo Stato del Grafo
 class AgentState(TypedDict):
     user_input: str
+    clean_keywords: str # Parole chiave estratte dall'input dell'utente
     kb_data: Optional[str] # Evidenza scientifica trovata o None se non disponibile
     missing_info: bool # Indica se l'input dell'utente richiede dati non presenti nella KB
     final_program: Optional[str] # Contiene il programma finale generato dall'agente, se disponibile
 
+def estrai_focus(state: AgentState) -> AgentState:
+    print("\n[Nodo 0] -> Pulizia dell'input ed estrazione keyword scientifiche...")
+    
+    prompt_sistema = """
+    Sei un analista dati specializzato in scienze motorie. Il tuo compito è leggere la richiesta dell'utente ed estrarre ESCLUSIVAMENTE i termini scientifici, i pattern di movimento o gli esercizi core (es. dips, pull-ups, squat, forza, ipertrofia, rpe).
+    Rimuovi saluti, preamboli, stati d'animo e parole inutili. 
+    Rispondi SOLO con le parole chiave separate da virgola, senza nient'altro.
+    
+    Esempio: "Vorrei fare forza nelle dips con zavorra ma ho i polsi deboli"
+    Output: dips, zavorra, forza, polsi
+    """
+    
+    response = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": prompt_sistema},
+            {"role": "user", "content": state["user_input"]}
+        ],
+        model="llama-3.1-8b-instant", # Veloce ed economico per task di estrazione
+    )
+    
+    keywords_pulite = response.choices[0].message.content.lower().strip()
+    print(f"Keyword estratte per la ricerca: [{keywords_pulite}]")
+    
+    return {"clean_keywords": keywords_pulite}
+
 # 2. Definiamo i Nodi del Workflow
 def controlla_kb(state: AgentState) -> AgentState:
-    print("\n[Nodo 1] -> Controllo della Knowledge Base locale...")
-    # Simuliamo il controllo del file JSON. 
-    # Se l'input contiene parole che non conosciamo, impostiamo missing_info a True
-    # Per ora facciamo finta che i dati sulle zavorre non ci siano per testare il flusso completo
-    user_q = state["user_input"].lower()
+    print("\n[Nodo 1] -> Controllo reale della Knowledge Base locale...")
     
-    # Placeholder logico: fingiamo di non avere dati specifici se si parla di zavorre avanzate
-    if "zavorra" in user_q:
+    user_input_lower = state["user_input"].lower()
+    script_dir = Path(__file__).parent
+    kb_path = script_dir / 'knowledge_base.json'
+    
+    # 1. Controlliamo se il file JSON esiste
+    if not kb_path.exists():
+        print("Il file knowledge_base.json non esiste ancora. Deviazione su ricerca paper.")
         return {"missing_info": True, "kb_data": None}
-    else:
-        return {"missing_info": False, "kb_data": "Linee guida standard: 3 serie da 10 rep."}
+        
+    try:
+        # 2. Leggiamo il database JSON
+        with open(kb_path, 'r', encoding='utf-8') as f:
+            kb_content = json.load(f)
+            
+        # 3. Scansione delle chiavi nel JSON per trovare corrispondenze
+        dati_trovati = []
+        for argomento, dettagli in kb_content.items():
+            # Se il nome dell'argomento (es. "linee_guida_forza" o "zavorre") è nell'input dell'utente
+            # O se l'utente menziona parole chiave interne
+            if argomenti_correlati(argomento, user_input_lower):
+                print(f"Corrispondenza trovata nella KB per l'argomento: '{argomento}'")
+                dati_trovati.append(f"--- {argomento.upper()} ---\n{json.dumps(dettagli, indent=2, ensure_ascii=False)}")
+        
+        # 4. Gestione del risultato del bivio logico
+        if dati_trovati:
+            # Uniamo tutte le regole scientifiche trovate in un'unica stringa nel blocco note (stato)
+            contesto_kb = "\n\n".join(dati_trovati)
+            return {"missing_info": False, "kb_data": contesto_kb}
+        else:
+            print("Nessuna linea guida specifica trovata nel database locale per questa richiesta.")
+            return {"missing_info": True, "kb_data": None}
+            
+    except Exception as e:
+        print(f"Errore durante la lettura della KB: {e}")
+        return {"missing_info": True, "kb_data": None}
+
+# Funzione di supporto interna per estendere l'intelligenza delle parole chiave
+def argomenti_correlati(chiave_db: str, testo_utente: str) -> bool:
+    # Mappiamo i sinonimi per rendere l'agente più elastico
+    mappa_sinonimi = {
+        "forza": ["forza", "zavorre", "weighted", "dips", "pull up", "pull-up", "massimali"],
+        "ipertrofia": ["massa", "ipertrofia", "muscolo", "crescita", "volume"],
+        "dimagrimento": ["definizione", "cut", "dimagrire", "cardio", "deficit"]
+    }
+    
+    # Controllo diretto sul nome della chiave
+    if chiave_db in testo_utente:
+        return True
+        
+    # Controllo sui sinonimi mappati
+    for radice, sinonimi in mappa_sinonimi.items():
+        if radice in chiave_db:
+            return any(sinonimo in testo_utente for sinonimo in sinonimi)
+            
+    return False
 
 def cerca_paper(state: AgentState) -> AgentState:
     print("\n[Nodo 2] -> Dati non trovati in KB. Avvio ricerca paper scientifici online...")
@@ -68,13 +142,14 @@ def decidi_percorso(state: AgentState):
 workflow = StateGraph(AgentState)
 
 # Aggiungiamo i nodi
+workflow.add_node("estrai_focus", estrai_focus)
 workflow.add_node("controlla_kb", controlla_kb)
 workflow.add_node("cerca_paper", cerca_paper)
 workflow.add_node("aggiorna_kb", aggiorna_kb)
 workflow.add_node("genera_scheda", genera_scheda)
 
 # Impostiamo il punto di ingresso
-workflow.set_entry_point("controlla_kb")
+workflow.set_entry_point("estrai_focus")
 
 # Aggiungiamo il bivio condizionale dopo il controllo KB
 workflow.add_conditional_edges(
@@ -87,6 +162,7 @@ workflow.add_conditional_edges(
 )
 
 # Colleghiamo i nodi della ricerca fino alla generazione
+workflow.add_edge("estrai_focus", "controlla_kb")
 workflow.add_edge("cerca_paper", "aggiorna_kb")
 workflow.add_edge("aggiorna_kb", "genera_scheda")
 workflow.add_edge("genera_scheda", END)
