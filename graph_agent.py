@@ -1,3 +1,8 @@
+import os
+import requests
+import time
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage
 from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from groq import Groq
@@ -6,6 +11,13 @@ from langgraph.graph import StateGraph, END
 
 load_dotenv()
 client = Groq()
+
+# --- Configurazione ---
+SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+MAX_RESULTS = 3  # quanti paper recuperare
+MAX_RETRY = 3         # tentativi massimi in caso di 429
+RETRY_DELAY = 3       # secondi di attesa iniziale (raddoppia ad ogni tentativo)
+llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
 # 1. Definiamo lo Stato del Grafo
 class AgentState(TypedDict):
@@ -28,11 +40,107 @@ def controlla_kb(state: AgentState) -> AgentState:
     else:
         return {"missing_info": False, "kb_data": "Linee guida standard: 3 serie da 10 rep."}
 
+
+def _cerca_su_semantic_scholar(query: str) -> list[dict]:
+    #Chiama l'API di Semantic Scholar e restituisce una lista di paper
+    params = {
+        "query": "dips, pull up, strength", #andra sostituito con query più specifica in futuro
+        "limit": MAX_RESULTS,
+        "fields": "title,abstract,year,authors,url",
+    }
+    headers = {
+        "User-Agent": "GymAgent/1.0",  # buona pratica verso l'API
+        "x-api-key": os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""),  
+    }
+ 
+    #serve per riprovare la richiesta in caso di 429 (rate limit)
+    delay = RETRY_DELAY
+    for tentativo in range(1, MAX_RETRY + 1):
+ 
+        response = requests.get( SEMANTIC_SCHOLAR_URL, params=params, headers=headers, timeout=15 )
+ 
+        if response.status_code == 429:
+            # Rispetta il Retry-After se presente nell'header, altrimenti backoff
+            retry_after = int(response.headers.get("Retry-After", delay))
+            print(f"  -> 429 Rate limit. Attendo {retry_after}s (tentativo {tentativo}/{MAX_RETRY})...")
+            time.sleep(retry_after)
+            delay *= 2  # backoff esponenziale
+            continue
+ 
+        response.raise_for_status()  # altri errori HTTP vengono lanciati subito
+ 
+        data = response.json()
+        papers = data.get("data", [])
+ 
+        risultati = []
+        for p in papers:
+            abstract = p.get("abstract") or ""
+            if not abstract:
+                continue  # scarta paper senza abstract
+            risultati.append({
+                "titolo": p.get("title", "N/D"),
+                "anno": p.get("year", "N/D"),
+                "abstract": abstract,
+                "url": p.get("url", ""),
+            })
+ 
+        return risultati
+ 
+    raise requests.RequestException(
+        f"Semantic Scholar ha risposto con 429 per {MAX_RETRY} tentativi consecutivi."
+    )
+ 
+def _riassumi_con_llm(domanda: str, papers: list[dict]) -> str:
+    #Usa l'LLM per sintetizzare le evidenze dai paper trovati.
+    testi_paper = "\n\n".join([
+        f"[Paper {i+1}] {p['titolo']} ({p['anno']})\n{p['abstract']}\nFonte: {p['url']}"
+        for i, p in enumerate(papers)
+    ])
+ 
+    prompt = f"""Sei un esperto di scienze dello sport e allenamento.
+                L'utente ha fatto questa domanda: "{domanda}"
+ 
+                Ecco gli abstract di {len(papers)} paper scientifici pertinenti:
+ 
+                {testi_paper}
+ 
+                Sintetizza le evidenze scientifiche trovate in modo chiaro e pratico,
+                citando i paper per numero (es: [Paper 1]).
+                Sii conciso ma preciso. Rispondi in italiano."""
+ 
+    risposta = llm.invoke([HumanMessage(content=prompt)])
+    return risposta.content
+
 def cerca_paper(state: AgentState) -> AgentState:
     print("\n[Nodo 2] -> Dati non trovati in KB. Avvio ricerca paper scientifici online...")
-    # Qui in futuro si collegherà lo strumento di ricerca (PubMed, Scholar, ecc.)
-    evidenze_estratte = "Evidenza da Paper 2026: Per la forza nelle zavorre stazionare tra 3-5 min di recupero e RPE 7-9."
-    return {"kb_data": evidenze_estratte}
+    
+    # Nodo LangGraph: cerca paper su Semantic Scholar e sintetizza
+    # le evidenze con un LLM prima di salvarle in kb_data.
+    
+    # Recupera la domanda originale dallo state
+    domanda = state.get("user_input", "")
+    if not domanda:
+        return {"kb_data": "Errore: nessuna domanda disponibile nello state."}
+ 
+    try:
+        # 1. Cerca i paper
+        print(f"  -> Ricerca su Semantic Scholar per: '{domanda}'")
+        papers = _cerca_su_semantic_scholar(domanda)
+ 
+        if not papers:
+            return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
+ 
+        print(f"  -> Trovati {len(papers)} paper con abstract. Avvio sintesi LLM...")
+ 
+        # 2. Riassumi con LLM
+        sintesi = _riassumi_con_llm(domanda, papers)
+ 
+        print("  -> Sintesi completata.")
+        return {"kb_data": sintesi}
+ 
+    except requests.RequestException as e:
+        print(f"  -> Errore nella chiamata a Semantic Scholar: {e}")
+        return {"kb_data": f"Errore durante la ricerca online: {str(e)}"}
 
 def aggiorna_kb(state: AgentState) -> AgentState:
     print("\n[Nodo 3] -> Scrittura delle nuove scoperte scientifiche nel file JSON...")
