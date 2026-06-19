@@ -29,6 +29,9 @@ class AgentState(TypedDict):
     missing_info: bool # Indica se l'input dell'utente richiede dati non presenti nella KB
     final_program: Optional[str] # Contiene il programma finale generato dall'agente, se disponibile
 
+# 2. Definiamo i Nodi del Workflow
+
+# ---------------------------------- NODO 0: Estrazione Focus ----------------- -----------------
 def estrai_focus(state: AgentState) -> AgentState:
     print("\n[Nodo 0] -> Pulizia dell'input ed estrazione keyword scientifiche...")
     
@@ -54,7 +57,7 @@ def estrai_focus(state: AgentState) -> AgentState:
     
     return {"clean_keywords": keywords_pulite}
 
-# 2. Definiamo i Nodi del Workflow
+# ---------------------------------- NODO 1: Controllo KB Locale ----------------- -----------------
 def controlla_kb(state: AgentState) -> AgentState:
     print("\n[Nodo 1] -> Controllo reale della Knowledge Base locale...")
     
@@ -94,7 +97,7 @@ def controlla_kb(state: AgentState) -> AgentState:
         print(f"Errore durante la lettura della KB: {e}")
         return {"missing_info": True, "kb_data": None}
 
-# Funzione di supporto interna per estendere l'intelligenza delle parole chiave
+# Funzione di utility per il nodo controlla_kb
 def argomenti_correlati(chiave_db: str, testo_utente: str) -> bool:
     # Mappiamo i sinonimi per rendere l'agente più elastico
     mappa_sinonimi = {
@@ -114,7 +117,39 @@ def argomenti_correlati(chiave_db: str, testo_utente: str) -> bool:
             
     return False
 
+# ---------------------------------- NODO 2: Ricerca Paper Scientifici Online ----------------- -----------------
+def cerca_paper(state: AgentState) -> AgentState:
+    print("\n[Nodo 2] -> Dati non trovati in KB. Avvio ricerca paper scientifici online...")
+    
+    # Nodo LangGraph: cerca paper su Semantic Scholar e sintetizza
+    # le evidenze con un LLM prima di salvarle in kb_data.
+    
+    # Recupera la domanda originale dallo state
+    domanda = state.get("user_input", "")
+    if not domanda:
+        return {"kb_data": "Errore: nessuna domanda disponibile nello state."}
+ 
+    try:
+        # 1. Cerca i paper
+        print(f"  -> Ricerca su Semantic Scholar per: '{domanda}'")
+        papers = _cerca_su_semantic_scholar(domanda)
+ 
+        if not papers:
+            return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
+ 
+        print(f"  -> Trovati {len(papers)} paper con abstract. Avvio sintesi LLM...")
+ 
+        # 2. Riassumi con LLM
+        sintesi = _riassumi_con_llm(domanda, papers)
+ 
+        print("  -> Sintesi completata.")
+        return {"kb_data": sintesi}
+ 
+    except requests.RequestException as e:
+        print(f"  -> Errore nella chiamata a Semantic Scholar: {e}")
+        return {"kb_data": f"Errore durante la ricerca online: {str(e)}"}
 
+# Funzione di utility per il nodo cerca_paper
 def _cerca_su_semantic_scholar(query: str) -> list[dict]:
     #Chiama l'API di Semantic Scholar e restituisce una lista di paper
     params = {
@@ -163,7 +198,8 @@ def _cerca_su_semantic_scholar(query: str) -> list[dict]:
     raise requests.RequestException(
         f"Semantic Scholar ha risposto con 429 per {MAX_RETRY} tentativi consecutivi."
     )
- 
+
+# Funzione di utility per il nodo cerca_paper 
 def _riassumi_con_llm(domanda: str, papers: list[dict]) -> str:
     #Usa l'LLM per sintetizzare le evidenze dai paper trovati.
     testi_paper = "\n\n".join([
@@ -185,42 +221,13 @@ def _riassumi_con_llm(domanda: str, papers: list[dict]) -> str:
     risposta = llm.invoke([HumanMessage(content=prompt)])
     return risposta.content
 
-def cerca_paper(state: AgentState) -> AgentState:
-    print("\n[Nodo 2] -> Dati non trovati in KB. Avvio ricerca paper scientifici online...")
-    
-    # Nodo LangGraph: cerca paper su Semantic Scholar e sintetizza
-    # le evidenze con un LLM prima di salvarle in kb_data.
-    
-    # Recupera la domanda originale dallo state
-    domanda = state.get("user_input", "")
-    if not domanda:
-        return {"kb_data": "Errore: nessuna domanda disponibile nello state."}
- 
-    try:
-        # 1. Cerca i paper
-        print(f"  -> Ricerca su Semantic Scholar per: '{domanda}'")
-        papers = _cerca_su_semantic_scholar(domanda)
- 
-        if not papers:
-            return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
- 
-        print(f"  -> Trovati {len(papers)} paper con abstract. Avvio sintesi LLM...")
- 
-        # 2. Riassumi con LLM
-        sintesi = _riassumi_con_llm(domanda, papers)
- 
-        print("  -> Sintesi completata.")
-        return {"kb_data": sintesi}
- 
-    except requests.RequestException as e:
-        print(f"  -> Errore nella chiamata a Semantic Scholar: {e}")
-        return {"kb_data": f"Errore durante la ricerca online: {str(e)}"}
-
+# ---------------------------------- NODO 3: Aggiornamento Knowledge Base ----------------- -----------------
 def aggiorna_kb(state: AgentState) -> AgentState:
     print("\n[Nodo 3] -> Scrittura delle nuove scoperte scientifiche nel file JSON...")
     # Ritorniamo un dizionario valido per non mandare in crash lo stream
     return {"missing_info": False}
 
+# ---------------------------------- NODO 4: Generazione Scheda ----------------- -----------------
 def genera_scheda(state: AgentState) -> AgentState:
     print("\n[Nodo 4] -> Generazione della scheda con Groq usando i dati scientifici...")
     
@@ -281,6 +288,7 @@ memory = MemorySaver()
 # Compiliamo il grafo
 app = workflow.compile()
 
+'''
 # --- GENERAZIONE E SALVATAGGIO DEL GRAFICO (VERSIONE WINDOWS) ---
 print("\n--- GENERAZIONE MAPPA DEL GRAFO ---")
 try:
@@ -295,7 +303,7 @@ try:
 except Exception as e:
     print(f"⚠️ Impossibile generare il codice Mermaid: {e}")
 # ----------------------------------------------------------------
-
+'''
 
 # 5. Esecuzione di Test
 if __name__ == "__main__":
