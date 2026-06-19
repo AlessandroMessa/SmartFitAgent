@@ -132,7 +132,7 @@ def cerca_paper(state: AgentState) -> AgentState:
     try:
         # 1. Cerca i paper
         print(f"  -> Ricerca su Semantic Scholar per: '{domanda}'")
-        papers = _cerca_su_semantic_scholar(domanda)
+        papers = []#_cerca_su_semantic_scholar(domanda)
  
         if not papers:
             return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
@@ -140,7 +140,7 @@ def cerca_paper(state: AgentState) -> AgentState:
         print(f"  -> Trovati {len(papers)} paper con abstract. Avvio sintesi LLM...")
  
         # 2. Riassumi con LLM
-        sintesi = _riassumi_con_llm(domanda, papers)
+        sintesi = []#_riassumi_con_llm(domanda, papers)
  
         print("  -> Sintesi completata:")
         print(sintesi)
