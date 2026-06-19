@@ -61,7 +61,7 @@ def estrai_focus(state: AgentState) -> AgentState:
 def controlla_kb(state: AgentState) -> AgentState:
     print("\n[Nodo 1] -> Controllo reale della Knowledge Base locale...")
     
-    user_input_lower = state["user_input"].lower()
+    clean_keywords_lower = state["clean_keywords"].lower()
     script_dir = Path(__file__).parent
     kb_path = script_dir / 'knowledge_base.json'
     
@@ -80,7 +80,7 @@ def controlla_kb(state: AgentState) -> AgentState:
         for argomento, dettagli in kb_content.items():
             # Se il nome dell'argomento (es. "linee_guida_forza" o "zavorre") è nell'input dell'utente
             # O se l'utente menziona parole chiave interne
-            if argomenti_correlati(argomento, user_input_lower):
+            if argomenti_correlati(argomento, clean_keywords_lower):
                 print(f"Corrispondenza trovata nella KB per l'argomento: '{argomento}'")
                 dati_trovati.append(f"--- {argomento.upper()} ---\n{json.dumps(dettagli, indent=2, ensure_ascii=False)}")
         
@@ -125,7 +125,7 @@ def cerca_paper(state: AgentState) -> AgentState:
     # le evidenze con un LLM prima di salvarle in kb_data.
     
     # Recupera la domanda originale dallo state
-    domanda = state.get("user_input", "")
+    domanda = state.get("clean_keywords", "")
     if not domanda:
         return {"kb_data": "Errore: nessuna domanda disponibile nello state."}
  
@@ -142,7 +142,8 @@ def cerca_paper(state: AgentState) -> AgentState:
         # 2. Riassumi con LLM
         sintesi = _riassumi_con_llm(domanda, papers)
  
-        print("  -> Sintesi completata.")
+        print("  -> Sintesi completata:")
+        print(sintesi)
         return {"kb_data": sintesi}
  
     except requests.RequestException as e:
@@ -151,9 +152,9 @@ def cerca_paper(state: AgentState) -> AgentState:
 
 # Funzione di utility per il nodo cerca_paper
 def _cerca_su_semantic_scholar(query: str) -> list[dict]:
-    #Chiama l'API di Semantic Scholar e restituisce una lista di paper
+    # Chiama l'API di Semantic Scholar e restituisce una lista di paper
     params = {
-        "query": "dips, pull up, strength", #andra sostituito con query più specifica in futuro
+        "query": query,
         "limit": MAX_RESULTS,
         "fields": "title,abstract,year,authors,url",
     }
@@ -201,7 +202,7 @@ def _cerca_su_semantic_scholar(query: str) -> list[dict]:
 
 # Funzione di utility per il nodo cerca_paper 
 def _riassumi_con_llm(domanda: str, papers: list[dict]) -> str:
-    #Usa l'LLM per sintetizzare le evidenze dai paper trovati.
+    # Usa l'LLM per sintetizzare le evidenze dai paper trovati.
     testi_paper = "\n\n".join([
         f"[Paper {i+1}] {p['titolo']} ({p['anno']})\n{p['abstract']}\nFonte: {p['url']}"
         for i, p in enumerate(papers)
