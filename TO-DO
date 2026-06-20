@@ -1,7 +1,35 @@
-Correggere nodo 2: Adesso non legge i paper giusti. E occhio rate limits.
+Correggere nodo 2: Adesso non legge i paper giusti. E occhio rate limits. DONE
 
-Correggere nodo 3
+Correggere nodo 3 DONE
 Correggere nodo 4
 Separazione resp. dei nodi in script diversi 
 
-Pattern
+Sistemare modo di salvare nel db, la struttura ottimale potrebbe essere subottimale per il salvataggio dei dati raccolti
+Database Seeding -->
+C'è un ragazzo su tiktok che cita tantissimi paper utili all'ipertrofia
+https://www.tiktok.com/@gabsliftsweights?_r=1&_t=ZN-97MZzFz1hW2
+
+
+https://pubmed.ncbi.nlm.nih.gov/40249908/
+https://pubmed.ncbi.nlm.nih.gov/21131862/
+
+Linee Guida "Gold Standard" (Infallibili): Ci sono pilastri della scienza dell'allenamento (es. le meta-analisi di Brad Schoenfeld sul volume per l'ipertrofia o le linee guida di Eric Helms sulla nutrizione/forza) che conosci già e che vuoi che l'agente usi come verità assoluta. Inserirle a mano nel JSON ti garantisce che il dato di partenza sia perfetto, pulito e privo di qualsiasi "interpretazione ballerina" da parte dell'LLM di ricerca.
+
+Risparmio di Costi e Latenza: Far fare l'intero viaggio User Input ➔ Traduzione Llama ➔ API PubMed ➔ Parsing Biopython ➔ Sintesi Qwen per argomenti pilastro ed estremamente comuni (come "ipertrofia", "forza panca", "squat") è inefficiente. Se pre-popoli il JSON con i 10/15 concetti chiave del fitness, il tuo agente sarà fulmineo nel rispondere a quelle richieste.
+
+Controllo dei Criteri di Qualità: Ti permette di strutturare e testare approfonditamente il Nodo 4 e il Nodo 1 senza dover per forza attivare la connessione internet ad ogni singolo test sul codice.
+
+
+Nel flusso attuale del vostro Nodo 2, ogni volta che un utente fa una domanda, lo script esegue esattamente 2 chiamate consecutive a PubMed:
+
+Una chiamata Entrez.esearch (per estrarre gli ID).
+
+Una chiamata Entrez.efetch (per scaricare gli abstract di quegli ID).
+
+Finché i test vengono eseguiti da un singolo utente alla volta che scrive a mano nel terminale, siete ampiamente al sicuro, perché 2 richieste avvengono nell'arco di un secondo, e l'utente impiegherà diversi secondi prima di digitare la domanda successiva.
+
+Il problema reale si presenta in due scenari:
+
+Seeding massivo (Pre-popolamento): Se decidete di creare uno script che cicla su una lista di 20 o 30 esercizi di fila per riempire "a mano" la Knowledge Base, il ciclo for di Python eseguirà decine di chiamate al millisecondo, facendo scattare il blocco di PubMed dopo appena un secondo.
+
+Multi-utenza futura: Se un domani collegherete l'agente a una chat (es. Telegram o Web) e 3 o 4 persone lo useranno contemporaneamente, i loro clic simultanei supereranno le 3 richieste al secondo sul vostro server.

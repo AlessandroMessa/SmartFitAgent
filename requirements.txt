@@ -2,3 +2,6 @@ groq
 python-dotenv
 langgraph
 langchain-groq
+beautifulsoup4
+requests
+biopython

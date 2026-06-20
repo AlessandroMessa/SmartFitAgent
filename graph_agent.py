@@ -1,6 +1,8 @@
 import os
 import requests
 import time
+import json
+import requests
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from typing import TypedDict, Optional
@@ -9,7 +11,7 @@ from groq import Groq
 from pathlib import Path
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
-import json
+from Bio import Entrez
 
 load_dotenv()
 client = Groq()
@@ -20,6 +22,8 @@ MAX_RESULTS = 3  # quanti paper recuperare
 MAX_RETRY = 3         # tentativi massimi in caso di 429
 RETRY_DELAY = 3       # secondi di attesa iniziale (raddoppia ad ogni tentativo)
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+# NOTA CRITICA: PubMed richiede obbligatoriamente un indirizzo email per identificare chi usa le loro API pubbliche gratuite
+Entrez.email = "ale.emme01@gmail.com"
 
 # 1. Definiamo lo Stato del Grafo
 class AgentState(TypedDict):
@@ -97,135 +101,177 @@ def controlla_kb(state: AgentState) -> AgentState:
         print(f"Errore durante la lettura della KB: {e}")
         return {"missing_info": True, "kb_data": None}
 
-# Funzione di utility per il nodo controlla_kb
 def argomenti_correlati(chiave_db: str, testo_utente: str) -> bool:
-    # Mappiamo i sinonimi per rendere l'agente più elastico
-    mappa_sinonimi = {
-        "forza": ["forza", "zavorre", "weighted", "dips", "pull up", "pull-up", "massimali"],
-        "ipertrofia": ["massa", "ipertrofia", "muscolo", "crescita", "volume"],
-        "dimagrimento": ["definizione", "cut", "dimagrire", "cardio", "deficit"]
-    }
+    # Normalizziamo tutto in minuscolo per evitare problemi di maiuscole
+    chiave_db = chiave_db.lower().strip()
+    testo_utente = testo_utente.lower().strip()
     
-    # Controllo diretto sul nome della chiave
-    if chiave_db in testo_utente:
+    # 1. Match diretto bidirezionale (Intercetta "zavorre" se l'utente scrive "zavorre")
+    if chiave_db in testo_utente or testo_utente in chiave_db:
         return True
         
-    # Controllo sui sinonimi mappati
+    # 2. Cluster semantici di sinonimi
+    mappa_sinonimi = {
+        "forza": ["forza", "zavorre", "zavorrate", "weighted", "dips", "pull up", "pull-up", "trazioni", "massimali"],
+        "ipertrofia": ["massa", "ipertrofia", "muscolo", "crescita", "volume", "ipertrofico"],
+        "dimagrimento": ["definizione", "cut", "dimagrire", "cardio", "deficit", "dimagrimento"]
+    }
+    
+    # Controlliamo se sia la chiave del DB sia l'input dell'utente appartengono allo stesso "mondo"
     for radice, sinonimi in mappa_sinonimi.items():
-        if radice in chiave_db:
-            return any(sinonimo in testo_utente for sinonimo in sinonimi)
+        # La chiave del DB appartiene a questo cluster? (es: è la radice "forza" o la parola "zavorre"?)
+        chiave_nel_cluster = (radice in chiave_db) or any(s in chiave_db for s in sinonimi)
+        
+        # L'input dell'utente appartiene a questo stesso cluster? (es: l'utente ha scritto "dips" o "forza"?)
+        utente_nel_cluster = (radice in testo_utente) or any(s in testo_utente for s in sinonimi)
+        
+        # Se entrambi sono nello stesso cluster, abbiamo un match scientifico!
+        if chiave_nel_cluster and utente_nel_cluster:
+            return True
             
     return False
 
 # ---------------------------------- NODO 2: Ricerca Paper Scientifici Online ----------------- -----------------
 def cerca_paper(state: AgentState) -> AgentState:
-    print("\n[Nodo 2] -> Dati non trovati in KB. Avvio ricerca paper scientifici online...")
+    print("\n[Nodo 2] -> Keyword mancanti nella KB. Ottimizzazione della query per PubMed...")
     
-    # Nodo LangGraph: cerca paper su Semantic Scholar e sintetizza
-    # le evidenze con un LLM prima di salvarle in kb_data.
-    
-    # Recupera la domanda originale dallo state
-    domanda = state.get("clean_keywords", "")
-    if not domanda:
-        return {"kb_data": "Errore: nessuna domanda disponibile nello state."}
- 
-    try:
-        # 1. Cerca i paper
-        print(f"  -> Ricerca su Semantic Scholar per: '{domanda}'")
-        papers = []#_cerca_su_semantic_scholar(domanda)
- 
-        if not papers:
-            return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
- 
-        print(f"  -> Trovati {len(papers)} paper con abstract. Avvio sintesi LLM...")
- 
-        # 2. Riassumi con LLM
-        sintesi = []#_riassumi_con_llm(domanda, papers)
- 
-        print("  -> Sintesi completata:")
-        print(sintesi)
-        return {"kb_data": sintesi}
- 
-    except requests.RequestException as e:
-        print(f"  -> Errore nella chiamata a Semantic Scholar: {e}")
-        return {"kb_data": f"Errore durante la ricerca online: {str(e)}"}
-
-# Funzione di utility per il nodo cerca_paper
-def _cerca_su_semantic_scholar(query: str) -> list[dict]:
-    # Chiama l'API di Semantic Scholar e restituisce una lista di paper
-    params = {
-        "query": query,
-        "limit": MAX_RESULTS,
-        "fields": "title,abstract,year,authors,url",
-    }
-    headers = {
-        "User-Agent": "GymAgent/1.0",  # buona pratica verso l'API
-        "x-api-key": os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""),  
-    }
- 
-    #serve per riprovare la richiesta in caso di 429 (rate limit)
-    delay = RETRY_DELAY
-    for tentativo in range(1, MAX_RETRY + 1):
- 
-        response = requests.get( SEMANTIC_SCHOLAR_URL, params=params, headers=headers, timeout=15 )
- 
-        if response.status_code == 429:
-            # Rispetta il Retry-After se presente nell'header, altrimenti backoff
-            retry_after = int(response.headers.get("Retry-After", delay))
-            print(f"  -> 429 Rate limit. Attendo {retry_after}s (tentativo {tentativo}/{MAX_RETRY})...")
-            time.sleep(retry_after)
-            delay *= 2  # backoff esponenziale
-            continue
- 
-        response.raise_for_status()  # altri errori HTTP vengono lanciati subito
- 
-        data = response.json()
-        papers = data.get("data", [])
- 
-        risultati = []
-        for p in papers:
-            abstract = p.get("abstract") or ""
-            if not abstract:
-                continue  # scarta paper senza abstract
-            risultati.append({
-                "titolo": p.get("title", "N/D"),
-                "anno": p.get("year", "N/D"),
-                "abstract": abstract,
-                "url": p.get("url", ""),
-            })
- 
-        return risultati
- 
-    raise requests.RequestException(
-        f"Semantic Scholar ha risposto con 429 per {MAX_RETRY} tentativi consecutivi."
+    # 1. Recuperiamo il focus in italiano (es. "zavorre dips forza")
+    focus_italiano = state.get("clean_keywords", "")
+    if not focus_italiano:
+        print("  -> Errore: nessuna keyword disponibile nello state.")
+        return {"kb_data": "Errore: parole chiave non disponibili."}
+        
+    # 2. CHIAMATA LIGHT A GROQ: Trasformiamo l'input in una query scientifica inglese
+    # Usiamo llama-3.1-8b-instant perché è fulmineo, gratuito e perfetto per la traduzione
+    prompt_ottimizzazione = (
+        "Sei un assistente specializzato in ricerca scientifica sportiva. "
+        "Il tuo compito è convertire i termini di allenamento in italiano forniti dall'utente "
+        "in una singola stringa di ricerca ottimizzata per il database PubMed (in inglese).\n"
+        "Usa termini scientifici corretti (es. 'resistance training' invece di 'pesi', 'hypertrophy' invece di 'ipertrofia').\n\n"
+        "REQUISITI RIGIDI:\n"
+        "1. Restituisci SOLO la stringa di ricerca finale in inglese, senza introduzioni, commenti o virgolette.\n"
+        "2. Mantieni la query focalizzata: usa al massimo 2 o 3 termini chiave inglesi uniti (se necessario) dall'operatore AND.\n\n"
+        f"Keywords italiane da ottimizzare: {focus_italiano}"
     )
+    
+    try:
+        print(f"  -> Focus originale: '{focus_italiano}'")
+        traduzione_completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt_ottimizzazione}],
+            model="llama-3.1-8b-instant", 
+        )
+        # La stringa pulita (es. "weighted dips AND strength training")
+        query_pubmed = traduzione_completion.choices[0].message.content.strip()
+        print(f"  -> 🎯 Query PubMed generata (Inglese): '{query_pubmed}'")
+        
+        # 3. FASE 1 PUBMED (ESearch): Cerchiamo i 2 paper più attinenti usando la query inglese
+        print("  -> Interrogazione database PubMed via Biopython...")
+        handle = Entrez.esearch(db="pubmed", term=query_pubmed, retmax=2)
+        risultato_ricerca = Entrez.read(handle)
+        handle.close()
+        
+        id_list = risultato_ricerca.get("IdList", [])
+        if not id_list:
+            print(f"  -> Nessun paper trovato su PubMed per la query: '{query_pubmed}'")
+            return {"kb_data": "Nessun paper scientifico trovato per questa domanda."}
+            
+        print(f"  -> Trovati {len(id_list)} ID di paper ({id_list}). Scaricamento abstract...")
+        
+        # 4. FASE 2 PUBMED (EFetch): Scarichiamo gli abstract reali
+        id_stringa = ",".join(id_list)
+        handle = Entrez.efetch(db="pubmed", id=id_stringa, retmode="xml")
+        dati_completi = Entrez.read(handle)
+        handle.close()
+        
+        testi_estratti = []
+        articoli = dati_completi.get("PubmedArticle", [])
+        
+        for i, articolo in enumerate(articoli, start=1):
+            try:
+                medline = articolo["MedlineCitation"]
+                titolo = medline["Article"]["ArticleTitle"]
+                abstract_data = medline["Article"].get("Abstract", {})
+                abstract_text_list = abstract_data.get("AbstractText", [])
+                
+                abstract_completo = " ".join([str(p) for p in abstract_text_list])
+                if abstract_completo:
+                    testi_estratti.append(f"--- Paper {i}: {titolo} ---\nAbstract: {abstract_completo}\n")
+            except KeyError:
+                continue
+                
+        if not testi_estratti:
+            return {"kb_data": "Impossibile recuperare abstract validi dai paper."}
+            
+        contesto_scientifico = "\n".join(testi_estratti)
+        print("  -> Abstract recuperati con successo! Invio a Qwen per l'estrazione dati strutturata...")
+        
+        # 5. FASE 3 SINTESI (Qwen): Elaboriamo il JSON finale basandoci sui paper veri
+        prompt_sistema = (
+            "Sei un assistente di ricerca specializzato in biomeccanica. Analizza gli abstract in inglese "
+            "e convertili in uno schema JSON rigoroso scritto in ITALIANO.\n\n"
+            "REQUISITI DI OUTPUT:\n"
+            "1. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza blocchi markdown (NO a ```json).\n"
+            "2. Usa come chiave principale esattamente la parola chiave italiana che ha originato la ricerca.\n\n"
+            "Struttura richiesta:\n"
+            "{\n"
+            f"  \"{focus_italiano}\": " "{\n"
+            "    \"recuperi\": \"linee guida sui tempi di recupero\",\n"
+            "    \"intensita_rpe\": \"linee guida su intensità o RPE\",\n"
+            "    \"note_scientifiche\": \"sintesi in italiano delle evidenze del paper\"\n"
+            "  }\n"
+            "}"
+        )
+        
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user", "content": contesto_scientifico}
+            ],
+            model="llama-3.3-70b-versatile", 
+            response_format={"type": "json_object"},
+        )
+        
+        sintesi_json_string = chat_completion.choices[0].message.content
+        return {"kb_data": json.loads(sintesi_json_string)}
+        
+    except Exception as e:
+        print(f"  -> Errore nel Nodo 2: {e}")
+        return {"kb_data": f"Errore durante la ricerca: {str(e)}"}
 
-# Funzione di utility per il nodo cerca_paper 
-def _riassumi_con_llm(domanda: str, papers: list[dict]) -> str:
-    # Usa l'LLM per sintetizzare le evidenze dai paper trovati.
-    testi_paper = "\n\n".join([
-        f"[Paper {i+1}] {p['titolo']} ({p['anno']})\n{p['abstract']}\nFonte: {p['url']}"
-        for i, p in enumerate(papers)
-    ])
- 
-    prompt = f"""Sei un esperto di scienze dello sport e allenamento.
-                L'utente ha fatto questa domanda: "{domanda}"
- 
-                Ecco gli abstract di {len(papers)} paper scientifici pertinenti:
- 
-                {testi_paper}
- 
-                Sintetizza le evidenze scientifiche trovate in modo chiaro e pratico,
-                citando i paper per numero (es: [Paper 1]).
-                Sii conciso ma preciso. Rispondi in italiano."""
- 
-    risposta = llm.invoke([HumanMessage(content=prompt)])
-    return risposta.content
 
 # ---------------------------------- NODO 3: Aggiornamento Knowledge Base ----------------- -----------------
 def aggiorna_kb(state: AgentState) -> AgentState:
     print("\n[Nodo 3] -> Scrittura delle nuove scoperte scientifiche nel file JSON...")
-    # Ritorniamo un dizionario valido per non mandare in crash lo stream
+    
+    # 1. Recuperiamo il dizionario strutturato prodotto dall'LLM nel Nodo 2
+    nuovi_dati = state.get("kb_data")
+    file_path = "knowledge_base.json"
+    
+    # Verifichiamo che ci siano dati reali da salvare e che sia un dizionario
+    if nuovi_dati and isinstance(nuovi_dati, dict):
+        # 2. Leggiamo il file esistente per fare un "append logico" ed evitare sovrascritture
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                try:
+                    kb = json.load(f)
+                except json.JSONDecodeError:
+                    kb = {} # Se il file fosse corrotto o vuoto, ripartiamo da un dizionario pulito
+        else:
+            kb = {}
+        
+        # 3. Aggiorniamo la Knowledge Base locale fondendo i vecchi dati con i nuovi
+        kb.update(nuovi_dati)
+        
+        # 4. Scriviamo il file aggiornato su disco
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(kb, f, indent=4, ensure_ascii=False)
+            
+        print(f"  -> 💾 File '{file_path}' aggiornato con successo con le nuove evidenze!")
+    else:
+        print("  -> Avviso: nessun dato dizionario valido trovato in 'kb_data'. Salto la scrittura.")
+        
+    # Ritorniamo il flag impostato su False: ora i dati ci sono, 
+    # il bivio condizionale devierà il flusso direttamente al Nodo 4 (genera_scheda)
     return {"missing_info": False}
 
 # ---------------------------------- NODO 4: Generazione Scheda ----------------- -----------------
