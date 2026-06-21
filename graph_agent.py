@@ -17,11 +17,13 @@ load_dotenv()
 client = Groq()
 
 # --- Configurazione ---
+'''
 SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-MAX_RESULTS = 3  # quanti paper recuperare
+MAX_RESULTS = 3       # quanti paper recuperare
 MAX_RETRY = 3         # tentativi massimi in caso di 429
 RETRY_DELAY = 3       # secondi di attesa iniziale (raddoppia ad ogni tentativo)
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+'''
 # NOTA CRITICA: PubMed richiede obbligatoriamente un indirizzo email per identificare chi usa le loro API pubbliche gratuite
 Entrez.email = "ale.emme01@gmail.com"
 
@@ -110,7 +112,7 @@ def argomenti_correlati(chiave_db: str, testo_utente: str) -> bool:
     if chiave_db in testo_utente or testo_utente in chiave_db:
         return True
         
-    # 2. Cluster semantici di sinonimi
+    # 2. Cluster semantici di sinonimi, TO-DO : potremmo usare un embedding o un modello semantico per fare match più sofisticati
     mappa_sinonimi = {
         "forza": ["forza", "zavorre", "zavorrate", "weighted", "dips", "pull up", "pull-up", "trazioni", "massimali"],
         "ipertrofia": ["massa", "ipertrofia", "muscolo", "crescita", "volume", "ipertrofico"],
@@ -203,9 +205,9 @@ def cerca_paper(state: AgentState) -> AgentState:
             return {"kb_data": "Impossibile recuperare abstract validi dai paper."}
             
         contesto_scientifico = "\n".join(testi_estratti)
-        print("  -> Abstract recuperati con successo! Invio a Qwen per l'estrazione dati strutturata...")
+        print("  -> Abstract recuperati con successo! Invio a llama per l'estrazione dati strutturata...")
         
-        # 5. FASE 3 SINTESI (Qwen): Elaboriamo il JSON finale basandoci sui paper veri
+        # 5. FASE 3 SINTESI (llama): Elaboriamo il JSON finale basandoci sui paper veri
         prompt_sistema = (
             "Sei un assistente di ricerca specializzato in biomeccanica. Analizza gli abstract in inglese "
             "e convertili in uno schema JSON rigoroso scritto in ITALIANO.\n\n"
@@ -272,7 +274,7 @@ def aggiorna_kb(state: AgentState) -> AgentState:
         
     # Ritorniamo il flag impostato su False: ora i dati ci sono, 
     # il bivio condizionale devierà il flusso direttamente al Nodo 4 (genera_scheda)
-    return {"missing_info": False}
+    return {"missing_info": False, "kb_data": json.dumps(nuovi_dati, indent=4, ensure_ascii=False)}
 
 # ---------------------------------- NODO 4: Generazione Scheda ----------------- -----------------
 def genera_scheda(state: AgentState) -> AgentState:

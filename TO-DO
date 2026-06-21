@@ -1,8 +1,8 @@
 Correggere nodo 2: Adesso non legge i paper giusti. E occhio rate limits. DONE
 
 Correggere nodo 3 DONE
-Correggere nodo 4
-Separazione resp. dei nodi in script diversi 
+Correggere nodo 4 DONE
+Separazione resp. dei nodi in script diversi Non sembra necessario.
 
 Sistemare modo di salvare nel db, la struttura ottimale potrebbe essere subottimale per il salvataggio dei dati raccolti
 Database Seeding -->
