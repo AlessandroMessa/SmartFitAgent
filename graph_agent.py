@@ -332,10 +332,11 @@ workflow.add_edge("aggiorna_kb", "genera_scheda")
 workflow.add_edge("genera_scheda", END)
 
 # Inizializza il salvataggio in memoria
+# Il memory saver permette di salvare lo stato del grafo in esecuzione, utile per debug o ripresa del flusso
 memory = MemorySaver()
 
 # Compiliamo il grafo
-app = workflow.compile()
+app = workflow.compile(checkpointer=memory)
 
 '''
 # --- GENERAZIONE E SALVATAGGIO DEL GRAFICO (VERSIONE WINDOWS) ---
