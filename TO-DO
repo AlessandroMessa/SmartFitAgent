@@ -1,10 +1,6 @@
-Correggere nodo 2: Adesso non legge i paper giusti. E occhio rate limits. DONE
+Trasformare il nodo 0 in un chatbot interattivo di Anamnesi e Ragionamento (*Conversational Query Refinement*)
 
-Correggere nodo 3 DONE
-Correggere nodo 4 DONE
-Separazione resp. dei nodi in script diversi Non sembra necessario.
-
-Sistemare modo di salvare nel db, la struttura ottimale potrebbe essere subottimale per il salvataggio dei dati raccolti
+Sistemare modo di salvare nel db, la struttura json potrebbe essere subottimale per il salvataggio dei dati raccolti
 Database Seeding -->
 C'è un ragazzo su tiktok che cita tantissimi paper utili all'ipertrofia
 https://www.tiktok.com/@gabsliftsweights?_r=1&_t=ZN-97MZzFz1hW2
